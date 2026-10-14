@@ -1,0 +1,9 @@
+{
+  "name": "sixseven-liga-dashboard",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Marcador y clasificación del equipo SIX SEVEN en la liga FPIB.",
+  "scripts": {
+    "dev": "vercel dev"
+  }
+}
