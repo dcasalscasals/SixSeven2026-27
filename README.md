@@ -10,6 +10,8 @@ Panel para consultar los resultados de todos los enfrentamientos de la División
 
 La página usa una función de Vercel en `/api/data` que lee la clasificación, todas las jornadas y las actas publicadas de los enfrentamientos. La vista separa los resultados por jornada e incluye victorias, derrotas, sets y las parejas de jugadores que se repiten por equipo. Vercel conserva la respuesta en caché durante cinco minutos.
 
+Incluye también `assets/six-seven-logo.png`, el logotipo usado en la cabecera. Conserva la carpeta `assets` al subir el proyecto.
+
 ## Datos consultados
 
 - Liga: `28876`

@@ -45,6 +45,18 @@ async function fetchPage(path) {
   return response.text();
 }
 
+async function mapLimit(items, limit, mapper) {
+  const results = new Array(items.length);
+  let cursor = 0;
+  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, async () => {
+    while (cursor < items.length) {
+      const index = cursor++;
+      results[index] = await mapper(items[index], index);
+    }
+  }));
+  return results;
+}
+
 function parseStandings(html) {
   return rowList(html).filter((row) => row.className.includes("LineasRnk")).map((row) => {
     const td = cells(row.html), team = anchor(td[1]);
@@ -61,6 +73,8 @@ function parseStandings(html) {
 function parseMatches(html, round) {
   return rowList(html).filter((row) => row.className.includes("LineasRnk")).map((row, index) => {
     const td = cells(row.html), home = anchor(td[0]), away = anchor(td[3]), date = anchor(td[4]);
+    // HTML encodes query separators inside href attributes as &amp;.
+    // Decode them before extracting Partido, otherwise no actas are fetched.
     const query = new URLSearchParams((anchor(td[5]).href || "").replace(/&amp;/gi, "&").split("?")[1] || "");
     const [datePart, time] = date.name.split(" - ");
     return {
@@ -110,7 +124,7 @@ function parseDetail(html, fixture) {
       winner: homeSets === awaySets ? null : homeSets > awaySets ? "home" : "away",
     });
   }
-  return { ...fixture, pairings, detailAvailable: pairings.length > 0 };
+  return { ...fixture, pairings, detailAvailable: pairings.length === 3 };
 }
 
 module.exports = async function handler(_request, response) {
@@ -123,19 +137,29 @@ module.exports = async function handler(_request, response) {
       i === 0 ? parseMatches(firstRoundHtml, 1) : fetchPage(`Ligas_Calendario.asp?grupo=${GROUP}&Liga=${LEAGUE}&jornada=${i + 1}`).then((html) => parseMatches(html, i + 1))));
     const allMatches = schedules.flat();
     const detailFixtures = allMatches.filter((match) => match.played && match.id);
-    const details = await Promise.all(detailFixtures.map(async (fixture) => {
-      try {
-        const html = await fetchPage(`Ligas_Detalle.asp?Liga=${LEAGUE}&Jornada=${fixture.round}&Partido=${fixture.id}&Grupo=${GROUP}`);
-        return parseDetail(html, fixture);
-      } catch {
-        return { ...fixture, pairings: [], detailAvailable: false };
+    // Keep requests bounded: launching every acta at once can cause upstream
+    // throttling and silently omit matches from the aggregate statistics.
+    const details = await mapLimit(detailFixtures, 5, async (fixture) => {
+      const path = `Ligas_Detalle.asp?Liga=${LEAGUE}&Jornada=${fixture.round}&Partido=${fixture.id}&Grupo=${GROUP}`;
+      for (let attempt = 0; attempt < 2; attempt++) {
+        try {
+          const parsed = parseDetail(await fetchPage(path), fixture);
+          if (parsed.detailAvailable || attempt === 1) return parsed;
+        } catch (error) {
+          if (attempt === 1) return { ...fixture, pairings: [], detailAvailable: false, detailError: error.message };
+        }
       }
-    }));
+      return { ...fixture, pairings: [], detailAvailable: false };
+    });
     const standings = parseStandings(standingsHtml);
+    const availableDetails = details.filter((detail) => detail.detailAvailable).length;
+    const missingDetails = details.filter((detail) => !detail.detailAvailable)
+      .map((detail) => ({ round: detail.round, matchId: detail.id, home: detail.home, away: detail.away }));
     response.status(200).json({
       league: "LA LIGA FPIB 26/27 (MENORCA)", group: "DIVISIÓN AZUL MASCULINA", team: "SIX SEVEN",
       standings, teamStanding: standings.find((team) => team.teamId === TEAM_ID) || null,
       rounds, matches: allMatches, details,
+      statsCoverage: { playedFixtures: detailFixtures.length, completeActs: availableDetails, missingActs: missingDetails },
       updatedAt: new Date().toISOString(),
       source: { standings: `${BASE}Ligas_Clasificacion.asp?Liga=${LEAGUE}&grupo=${GROUP}`, calendar: `${BASE}Ligas_Calendario.asp?grupo=${GROUP}&Liga=${LEAGUE}` },
     });
